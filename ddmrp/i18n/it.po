@@ -647,6 +647,7 @@ msgstr "Orizzonte futuro"
 
 #. module: ddmrp
 #: model:ir.model.fields,field_description:ddmrp.field_product_adu_calculation_method__source_future
+#: model:ir.model.fields,field_description:ddmrp.field_stock_buffer__adu_calculation_method_source_future
 msgid "Future Source"
 msgstr "Origine futura"
 
@@ -808,11 +809,13 @@ msgstr "In arrivo all'interno di DLT"
 
 #. module: ddmrp
 #: model:ir.model.fields,help:ddmrp.field_product_adu_calculation_method__source_future
+#: model:ir.model.fields,help:ddmrp.field_stock_buffer__adu_calculation_method_source_future
 msgid "Information source used for future calculation."
 msgstr "Origine informazione utilizzata per calcoli futuri."
 
 #. module: ddmrp
 #: model:ir.model.fields,help:ddmrp.field_product_adu_calculation_method__source_past
+#: model:ir.model.fields,help:ddmrp.field_stock_buffer__adu_calculation_method_source_past
 msgid "Information source used for past calculation."
 msgstr "Origine informazione utitlizzata per calcoli del passato."
 
@@ -1170,6 +1173,7 @@ msgstr "Orizzonte passato"
 
 #. module: ddmrp
 #: model:ir.model.fields,field_description:ddmrp.field_product_adu_calculation_method__source_past
+#: model:ir.model.fields,field_description:ddmrp.field_stock_buffer__adu_calculation_method_source_past
 msgid "Past Source"
 msgstr "Sorgente passata"
 
@@ -2035,8 +2039,8 @@ msgstr "Visualizza fabbisogno qualificato da MRP"
 
 #. module: ddmrp
 #: model_terms:ir.ui.view,arch_db:ddmrp.stock_buffer_view_form
-msgid "View Qualified Demand from Pickings"
-msgstr "Visualizza fabbisogno qualificato da prelievi"
+msgid "View Qualified Demand from Moves"
+msgstr ""
 
 #. module: ddmrp
 #: model:ir.model,name:ddmrp.model_stock_warehouse
@@ -2195,6 +2199,9 @@ msgstr "giorni"
 #: model_terms:ir.ui.view,arch_db:ddmrp.view_run_ddmrp_wizard
 msgid "or"
 msgstr "o"
+
+#~ msgid "View Qualified Demand from Pickings"
+#~ msgstr "Visualizza fabbisogno qualificato da prelievi"
 
 #~ msgid "Quantity"
 #~ msgstr "Quantità"
