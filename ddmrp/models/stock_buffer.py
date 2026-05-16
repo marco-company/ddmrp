@@ -725,7 +725,10 @@ class StockBuffer(models.Model):
             precision_rounding=self.product_uom.rounding,
         )
         tor2_exec = self.top_of_green
-        toy2_exec = (tor2_exec + tog_exec) / 2
+        toy2_exec = float_round(
+            (tor2_exec + tog_exec) / 2,
+            precision_rounding=self.product_uom.rounding,
+        )
         hex_colors = self._get_colors_hex_map(pallete="execution")
         red = p.vbar(
             x=1,
@@ -1037,7 +1040,7 @@ class StockBuffer(models.Model):
                 continue
             supplier_info = rec._get_product_sellers().filtered(
                 lambda r: r.partner_id == rec.main_supplier_id
-                and r.product_id == rec.product_id
+                and (not r.product_id or r.product_id == rec.product_id)
             )
             rec.product_vendor_code = fields.first(supplier_info).product_code
 
@@ -1095,6 +1098,12 @@ class StockBuffer(models.Model):
     )
     adu_calculation_method_type = fields.Selection(
         related="adu_calculation_method.method",
+    )
+    adu_calculation_method_source_past = fields.Selection(
+        related="adu_calculation_method.source_past",
+    )
+    adu_calculation_method_source_future = fields.Selection(
+        related="adu_calculation_method.source_future",
     )
     adu_fixed = fields.Float(
         string="Fixed ADU",
@@ -1174,8 +1183,16 @@ class StockBuffer(models.Model):
         digits="Product Unit of Measure",
         readonly=True,
     )
+    demand_stock_move_ids = fields.Many2many(
+        comodel_name="stock.move",
+        help="All demand stock moves for this buffer",
+    )
     qualified_demand_stock_move_ids = fields.Many2many(
         comodel_name="stock.move",
+        relation="stock_buffer_qualified_demand_stock_move_rel",
+        column1="stock_buffer_id",
+        column2="stock_move_id",
+        help="Stock moves considered qualified demand for this buffer",
     )
     qualified_demand_mrp_move_ids = fields.Many2many(
         comodel_name="mrp.move",
@@ -1663,6 +1680,7 @@ class StockBuffer(models.Model):
         for rec in self:
             qualified_demand = 0.0
             moves = rec._search_stock_moves_qualified_demand()
+            rec.demand_stock_move_ids = moves
             mrp_moves = rec._search_mrp_moves_qualified_demand()
             demand_by_days = rec._get_demand_by_days(moves)
             mrp_moves_by_days = rec._get_qualified_mrp_moves(mrp_moves)
@@ -1674,7 +1692,7 @@ class StockBuffer(models.Model):
                 ):
                     qualified_demand += demand_by_days.get(date, 0.0)
                 else:
-                    moves = moves.filtered(lambda x: x.date != date)
+                    moves = moves.filtered(lambda x: x.date.date() != date)
                 if (
                     mrp_moves_by_days.get(date, 0.0) >= rec.order_spike_threshold
                     or date <= today
@@ -1850,23 +1868,25 @@ class StockBuffer(models.Model):
         result["domain"] = [("id", "in", moves.ids)]
         return result
 
+    def _get_unconfirmed_po_states(self):
+        return ("draft", "sent", "to approve")
+
     def _get_rfq_dlt(self, dlt_interval=None):
         self.ensure_one()
         cut_date = self._get_incoming_supply_date_limit()
+        po_states = self._get_unconfirmed_po_states()
         if dlt_interval == "inside":
             pols = self.purchase_line_ids.filtered(
                 lambda l: l.date_planned <= fields.Datetime.to_datetime(cut_date)
-                and l.state in ("draft", "sent", "to approve")
+                and l.state in po_states
             )
         elif dlt_interval == "outside":
             pols = self.purchase_line_ids.filtered(
                 lambda l: l.date_planned > fields.Datetime.to_datetime(cut_date)
-                and l.state in ("draft", "sent", "to approve")
+                and l.state in po_states
             )
         else:
-            pols = self.purchase_line_ids.filtered(
-                lambda l: l.state in ("draft", "sent", "to approve")
-            )
+            pols = self.purchase_line_ids.filtered(lambda l: l.state in po_states)
         return pols
 
     def action_view_supply_moves_inside_dlt_window(self):
@@ -1901,8 +1921,11 @@ class StockBuffer(models.Model):
 
     def action_view_qualified_demand_moves(self):
         result = self.env["ir.actions.actions"]._for_xml_id("stock.stock_move_action")
-        result["context"] = {}
-        result["domain"] = [("id", "in", self.qualified_demand_stock_move_ids.ids)]
+        result["context"] = {
+            "search_default_qualified_demand_buffer_ids": self.name,
+            "show_reserved_availability": True,
+        }
+        result["domain"] = [("id", "in", self.demand_stock_move_ids.ids)]
         return result
 
     def action_view_qualified_demand_mrp(self):
@@ -1998,11 +2021,13 @@ class StockBuffer(models.Model):
         return action
 
     @api.model
-    def cron_ddmrp_adu(self, automatic=False):
+    def cron_ddmrp_adu(self, automatic=False, domain=None):
         """calculate ADU for each DDMRP buffer. Called by cronjob."""
         auto_commit = not getattr(threading.current_thread(), "testing", False)
         _logger.info("Start cron_ddmrp_adu.")
-        buffer_ids = self.search([]).ids
+        if not domain:
+            domain = []
+        buffer_ids = self.search(domain).ids
         i = 0
         j = len(buffer_ids)
         for buffer_chunk_ids in split_every(self.CRON_DDMRP_CHUNKS, buffer_ids):
@@ -2059,12 +2084,14 @@ class StockBuffer(models.Model):
         return True
 
     @api.model
-    def cron_ddmrp(self, automatic=False):
+    def cron_ddmrp(self, automatic=False, domain=None):
         """Calculate key DDMRP parameters for each buffer.
         Called by cronjob."""
         auto_commit = not getattr(threading.current_thread(), "testing", False)
         _logger.info("Start cron_ddmrp.")
-        buffer_ids = self.search([]).ids
+        if not domain:
+            domain = []
+        buffer_ids = self.search(domain).ids
         i = 0
         j = len(buffer_ids)
         for buffer_chunk_ids in split_every(self.CRON_DDMRP_CHUNKS, buffer_ids):

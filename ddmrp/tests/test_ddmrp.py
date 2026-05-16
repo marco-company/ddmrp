@@ -16,7 +16,7 @@ class TestDdmrp(TestDdmrpCommon):
 
     def test_01_adu_calculation_fixed(self):
         """Test fixed ADU assigned correctly with fixed method."""
-        self.bufferModel.cron_ddmrp_adu()
+        self.bufferModel.cron_ddmrp_adu(domain=[("id", "=", self.buffer_a.id)])
         to_assert_value = 4
         self.assertEqual(self.buffer_a.adu, to_assert_value)
 
@@ -146,7 +146,7 @@ class TestDdmrp(TestDdmrpCommon):
             picking.action_assign()
             picking._action_done()
 
-        self.bufferModel.cron_ddmrp_adu()
+        self.bufferModel.cron_ddmrp_adu(domain=[("id", "=", self.buffer_a.id)])
 
         to_assert_value = 0
         self.assertEqual(self.buffer_a.adu, to_assert_value)
@@ -314,7 +314,10 @@ class TestDdmrp(TestDdmrpCommon):
         date_move = datetime.today()
         expected_result = self.buffer_a.order_spike_threshold * 2
         self.create_pickingoutA(date_move, expected_result)
-        self.bufferModel.cron_ddmrp()
+        # Test domain in cron by skipping the buffer being checked:
+        self.bufferModel.cron_ddmrp(domain=[("id", "!=", self.buffer_a.id)])
+        self.assertNotEqual(self.buffer_a.qualified_demand, expected_result)
+        self.bufferModel.cron_ddmrp(domain=[("id", "=", self.buffer_a.id)])
         self.assertEqual(self.buffer_a.qualified_demand, expected_result)
 
     def test_11_qualified_demand_2(self):
@@ -1303,3 +1306,46 @@ class TestDdmrp(TestDdmrpCommon):
             ]
         )
         self.assertTrue(op_nbp)
+
+    def test_47_demand_stock_move_ids_and_qualified_demand_buffer_ids(self):
+        """demand_stock_move_ids contains all demand moves within horizon;
+        qualified_demand_stock_move_ids contains only moves that are qualified
+        demand. The inverse field qualified_demand_buffer_ids on
+        stock.move reflects which buffers consider a move as qualified demand.
+        action_view_qualified_demand_moves returns the full demand set as
+        domain and pre-activates the qualified-demand filter via context."""
+        threshold = self.buffer_a.order_spike_threshold
+        # Move today: always qualified regardless of quantity.
+        picking_qualified = self.create_pickingoutA(datetime.today(), threshold * 2)
+        # Move within horizon but below threshold: demand but not qualified.
+        date_within_horizon = datetime.today() + timedelta(
+            days=self.buffer_a.order_spike_horizon - 1
+        )
+        picking_demand_only = self.create_pickingoutA(
+            date_within_horizon, threshold - 1
+        )
+        self.bufferModel.cron_ddmrp(domain=[("id", "=", self.buffer_a.id)])
+        qualified_move = picking_qualified.move_ids
+        demand_only_move = picking_demand_only.move_ids
+        # Both moves appear in the full demand set.
+        self.assertIn(qualified_move, self.buffer_a.demand_stock_move_ids)
+        self.assertIn(demand_only_move, self.buffer_a.demand_stock_move_ids)
+        # Only the qualifying move appears in qualified_demand_stock_move_ids.
+        self.assertIn(qualified_move, self.buffer_a.qualified_demand_stock_move_ids)
+        self.assertNotIn(
+            demand_only_move, self.buffer_a.qualified_demand_stock_move_ids
+        )
+        # Inverse field: qualified_demand_buffer_ids reflects the same data.
+        self.assertIn(self.buffer_a, qualified_move.qualified_demand_buffer_ids)
+        self.assertNotIn(self.buffer_a, demand_only_move.qualified_demand_buffer_ids)
+        # action_view_qualified_demand_moves returns full demand as domain
+        # and activates the qualified-demand buffer filter by default.
+        action = self.buffer_a.action_view_qualified_demand_moves()
+        domain_ids = action["domain"][0][2]
+        self.assertIn(qualified_move.id, domain_ids)
+        self.assertIn(demand_only_move.id, domain_ids)
+        self.assertEqual(
+            action["context"].get("search_default_qualified_demand_buffer_ids"),
+            self.buffer_a.name,
+        )
+        self.assertTrue(action["context"].get("show_reserved_availability"))
