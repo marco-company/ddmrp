@@ -1,5 +1,5 @@
-# Copyright 2021 ForgeFlow S.L. (https://www.forgeflow.com)
-# License AGPL-3.0 or later (https://www.gnu.org/licenses/lgpl.html).
+# Copyright 2021-26 ForgeFlow S.L. (https://www.forgeflow.com)
+# License LGPL-3.0 or later (https://www.gnu.org/licenses/lgpl.html).
 
 from odoo import api, fields, models
 
@@ -15,23 +15,40 @@ class StockBuffer(models.Model):
         comodel_name="sale.order.line",
     )
 
-    def _get_sale_source_location(self):
+    def _get_sale_source_location(self, proc_locs):
+        # Adapting this method to be very similar to _get_source_location_from_route
+        # from stock_helper but not using that as it disappears in future versions and
+        # we don't want to add dependency to the new module.
         self.ensure_one()
-        proc_loc = self.env.ref("stock.stock_location_customers")
         values = {
             "warehouse_id": self.warehouse_id,
             "company_id": self.company_id,
         }
-        rule = self.env["procurement.group"]._get_rule(
-            self.product_id, proc_loc, values
-        )
-        return rule and rule.location_src_id
+        sale_source_locations = self.env["stock.location"]
+        for proc_loc in proc_locs:
+            current_location = proc_loc
+            while current_location:
+                rule = self.env["procurement.group"]._get_rule(
+                    self.product_id, current_location, values
+                )
+                if not rule:
+                    break
+                if rule.procure_method == "make_to_stock":
+                    sale_source_locations |= rule.location_src_id
+                    break
+                if rule.location_src_id == current_location:
+                    break
+                current_location = rule.location_src_id
+        return sale_source_locations
 
     @api.depends("warehouse_id", "location_id")
     def _compute_can_serve_sales(self):
+        proc_locations = self.env["stock.location"].search([("usage", "=", "customer")])
         for rec in self:
-            loc = rec._get_sale_source_location()
-            rec.can_serve_sales = loc.is_sublocation_of(rec.location_id)
+            locs = rec._get_sale_source_location(proc_locations)
+            rec.can_serve_sales = any(
+                [loc.is_sublocation_of(rec.location_id) for loc in locs]
+            )
 
     def _search_sales_qualified_demand_domain(self):
         self.ensure_one()
@@ -44,9 +61,8 @@ class StockBuffer(models.Model):
                 "in",
                 ["draft", "sent"],
             ),
-            ("commitment_date", "<=", date_to),
+            ("order_id.commitment_date", "<=", date_to),
             ("order_id.warehouse_id", "=", self.warehouse_id.id),
-            ("move_ids", "=", False),
         ]
 
     def _search_sales_qualified_demand(self):
@@ -54,14 +70,18 @@ class StockBuffer(models.Model):
         so_lines = self.env["sale.order.line"].search(domain)
         return so_lines
 
+    def _get_sol_date(self, sol):
+        """Return the date to use for a sale order line in DDMRP demand calculation."""
+        return sol.order_id.commitment_date
+
     def _get_so_lines_by_days(self, so_lines):
         so_lines_by_days = {}
-        sol_dates = [dt.date() for dt in so_lines.mapped("commitment_date")]
+        sol_dates = [self._get_sol_date(sol).date() for sol in so_lines]
         for d in sol_dates:
             if not so_lines_by_days.get(d):
                 so_lines_by_days[d] = 0.0
         for sol in so_lines:
-            date = sol.commitment_date.date()
+            date = self._get_sol_date(sol).date()
             so_lines_by_days[date] += sol.product_uom._compute_quantity(
                 sol.product_uom_qty, sol.product_id.uom_id
             )
@@ -84,7 +104,7 @@ class StockBuffer(models.Model):
                         qualified_demand += so_lines_by_days.get(date, 0.0)
                     else:
                         lines = lines.filtered(
-                            lambda x: x.commitment_date.date() != date
+                            lambda x: rec._get_sol_date(x).date() != date
                         )
                 rec.qualified_demand += qualified_demand
                 rec.qualified_demand_sale_order_line_ids = lines
